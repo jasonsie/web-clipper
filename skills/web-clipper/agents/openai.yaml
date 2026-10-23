@@ -1,0 +1,3 @@
+interface:
+  display_name: "Web Clipper"
+  short_description: "Clip a web page into an Obsidian vault with local images and graphs"

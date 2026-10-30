@@ -1,6 +1,6 @@
 ---
 name: web-clipper
-description: Clip a web page into an Obsidian vault the way Obsidian Web Clipper does — the full body under the clip frontmatter (source/title/author/published/created/description/tags: row) with every image, inline SVG and canvas graph saved locally as wikilinked attachments. Use when asked to clip, save, archive or "crawl back" a URL, or to localize remote images in an existing clip. A page that cannot be fetched headlessly is saved from the user's browser and passed back with --html.
+description: Clip a web page into an Obsidian vault the way Obsidian Web Clipper does — the full body under the clip frontmatter (source/title/author/published/created/description/tags rows) with every image, inline SVG and canvas graph saved locally as wikilinked attachments. Use when asked to clip, save, archive or "crawl back" a URL, or to localize remote images in an existing clip. A page that cannot be fetched headlessly is saved from the user's browser and passed back with --html.
 ---
 
 # Web Clipper

@@ -13,6 +13,9 @@ Usage
                       [--assets-dir DIR] [--no-assets] [--keep-html] [--force]
                       [--timeout S] [--wait-for MS] [--user-agent UA] [--min-graph-px N] [--json]
     web-clipper --localize NOTE.md [--vault DIR] [--assets-dir DIR] [--json]
+    web-clipper --adopt RAW.md --to DEST.md [--stem STEM] [--dry-run] [--vault DIR] [--json]
+    web-clipper --release RAW.md [--vault DIR] [--json]     # after a good adoption: drop the raw copy
+    web-clipper --unadopt RAW.md [--vault DIR] [--json]     # after a bad one: drop the adopted copy
     (web-clipper is bin/web-clipper, which runs this file; `python3 clip.py ...` is the same.)
 
 Limitation and recourse
@@ -43,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-VERSION = "2.1.0"  # = .claude-plugin/plugin.json; a test keeps them equal
+VERSION = "2.2.0"  # = .claude-plugin/plugin.json; a test keeps them equal
 SKILL_DIR = Path(__file__).resolve().parent.parent
 INPAGE_JS = SKILL_DIR / "scripts" / "inpage.js"
 DEFAULT_TEMPLATE = SKILL_DIR / "templates" / "row.json"
@@ -666,6 +669,9 @@ def localize_markdown(md: str, fetched: Fetched, base_url: str, store: AssetStor
             name = store_url(payload.url, payload.alt)
             if name:
                 edits.append((start, end, wikilink(name, payload.alt)))
+        elif store.vault is not None and not urllib.parse.urlparse(payload).scheme and \
+                (store.vault / payload).is_file():
+            pass  # an <img> already pointing at a vault file (an earlier localize or an adoption)
         else:
             name = store_url(payload, "")
             if name:
@@ -689,7 +695,9 @@ def report(summary: dict, as_json: bool, warnings: list) -> None:
     log(f"note:   {summary['note']}")
     if summary.get("via"):
         log(f"via:    {summary['via']}  url: {summary.get('url', '')}")
-    if assets:
+    if "renamed" in assets:
+        log(f"assets: {assets['renamed']} renamed, {assets['embeds']} links rewritten -> {summary.get('assets_dir')}")
+    elif assets:
         log(f"assets: {assets.get('saved', 0)} saved, {assets.get('failed', 0)} left remote, "
             f"{assets.get('graphs', 0)} graphs captured, {assets.get('svg_blocks', 0)} inline svg "
             f"-> {summary.get('assets_dir', '')}")
@@ -781,9 +789,11 @@ def cmd_localize(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
     if not source:
         warnings.append("no `source:` in frontmatter; relative image links cannot be resolved")
     base_url = source or "https://localhost/"
-    slug = slugify(title or note_path.stem)
     vault = Path(args.vault).expanduser().resolve() if args.vault else find_vault(note_path.parent)
-    store = AssetStore(attachment_base(vault, note_path.parent, args.assets_dir) / slug, slug, vault)
+    base = attachment_base(vault, note_path.parent, args.assets_dir)
+    # An adopted note keeps its images in <base>/<note stem>/; a raw clip uses the title slug.
+    slug = note_path.stem if (base / note_path.stem / "assets.json").is_file() else slugify(title or note_path.stem)
+    store = AssetStore(base / slug, slug, vault)
     ua = args.user_agent or cfg.get("user_agent") or DEFAULT_UA
     fetched = Fetched(html="", url=base_url, via="localize")
     new_md, stats = localize_markdown(md, fetched, base_url, store, ua, args.timeout, warnings)
@@ -794,6 +804,213 @@ def cmd_localize(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
                "assets_dir": str(store.directory), "changed": new_md != md, "warnings": warnings}
     report(summary, args.json, warnings)
     return EXIT_ASSETS if stats.get("failed") else EXIT_OK
+
+
+# ----------------------------------------------------------------------------- adopt / release / unadopt
+#
+# Adoption moves a clip out of raw/ in two phases, so one complete copy exists at every step:
+#   --adopt    copy the note to DEST and its images to <attachments>/<stem>/, renamed <stem>-NN-...
+#   --release  delete the raw clip and its old image folder (only for a recorded adoption)
+#   --unadopt  delete the adopted copy instead, keeping the raw clip
+# Each adoption is recorded in <attachments of the raw note>/.adoptions.json, keyed by the raw note.
+
+EMBED_RE = re.compile(r"!\[\[([^\]|\n]+?)(\|[^\]\n]*)?\]\]")
+LEDGER = ".adoptions.json"
+
+
+def _resolve(path: str) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def _key(path: Path, vault: Optional[Path]) -> str:
+    if vault is not None:
+        try:
+            return path.relative_to(vault).as_posix()
+        except ValueError:
+            pass
+    return path.as_posix()
+
+
+def _inside(path: Path, vault: Optional[Path]) -> bool:
+    if vault is None:
+        return True
+    try:
+        path.relative_to(vault)
+        return True
+    except ValueError:
+        return False
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ClipError(f"unreadable {path}: {exc}", EXIT_USAGE) from exc
+
+
+def _write_json(path: Path, data: dict) -> None:
+    if data:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+
+
+def _source(args: argparse.Namespace, note_arg: str) -> tuple[Path, Optional[Path], Path, Path, str]:
+    """The raw note, the vault, its attachment base, its image folder and slug."""
+    note = _resolve(note_arg)
+    if not note.is_file():
+        raise ClipError(f"note not found: {note}", EXIT_USAGE)
+    vault = _resolve(args.vault) if args.vault else find_vault(note.parent)
+    frontmatter, _ = parse_frontmatter(note.read_text(encoding="utf-8"))
+    title = frontmatter.get("title") if isinstance(frontmatter.get("title"), str) else ""
+    slug = slugify(title or note.stem)
+    base = attachment_base(vault, note.parent, args.assets_dir)
+    return note, vault, base, base / slug, slug
+
+
+def rewrite_targets(md: str, names: dict, paths: dict) -> tuple[str, int]:
+    """Point image embeds (names) and <img src> paths (paths) at their new files, outside code fences."""
+    fences = fenced_ranges(md)
+    edits = []
+    for match in EMBED_RE.finditer(md):
+        target = match.group(1).strip()
+        if target in names and not any(a <= match.start() < b for a, b in fences):
+            edits.append((match.start(1), match.end(1), names[target]))
+    for match in HTML_IMG_RE.finditer(md):
+        if match.group(2) in paths and not any(a <= match.start() < b for a, b in fences):
+            edits.append((match.start(2), match.end(2), paths[match.group(2)]))
+    for start, end, replacement in sorted(edits, reverse=True):
+        md = md[:start] + replacement + md[end:]
+    return md, len(edits)
+
+
+def cmd_adopt(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
+    note, vault, base, old_dir, slug = _source(args, args.adopt)
+    if not args.to:
+        raise ClipError("--adopt needs --to DEST.md", EXIT_USAGE)
+    dest = _resolve(args.to)
+    stem = args.stem or dest.stem
+    if dest.suffix.lower() != ".md" or dest == note:
+        raise ClipError(f"--to must be a new .md path: {dest}", EXIT_USAGE)
+    if not dest.parent.is_dir():
+        raise ClipError(f"destination folder does not exist: {dest.parent}", EXIT_USAGE)
+    if not _inside(dest, vault):
+        raise ClipError(f"destination is outside the vault: {dest}", EXIT_USAGE)
+    if dest.exists():
+        raise ClipError(f"output exists: {dest}", EXIT_EXISTS)
+    ledger_path = base / LEDGER
+    ledger = _read_json(ledger_path)
+    key = _key(note, vault)
+    if key in ledger:
+        raise ClipError(f"already adopted to {ledger[key]['to']}; --release or --unadopt it first", EXIT_EXISTS)
+
+    manifest = _read_json(old_dir / "assets.json")
+    entries = manifest.get("assets", []) if manifest else []
+    new_dir = attachment_base(vault, dest.parent, args.assets_dir) / stem
+    if entries and new_dir.exists():
+        raise ClipError(f"asset folder exists: {new_dir}", EXIT_EXISTS)
+    names, paths, new_entries = {}, {}, []
+    for entry in entries:
+        old = entry["file"]
+        new = stem + old[len(slug):] if old.startswith(slug + "-") else f"{stem}-{old}"
+        data = (old_dir / old).read_bytes() if (old_dir / old).is_file() else None
+        if data is None or hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+            raise ClipError(f"{old_dir / old} is missing or does not match its sha256 in assets.json", EXIT_CONVERT)
+        names[old] = new
+        paths[_key(old_dir / old, vault)] = _key(new_dir / new, vault)
+        new_entries.append({**entry, "file": new})
+    md, embeds = rewrite_targets(note.read_text(encoding="utf-8"), names, paths)
+    summary = {"note": str(dest), "adopted_from": str(note), "assets_dir": str(new_dir) if entries else None,
+               "assets": {"renamed": len(names), "embeds": embeds}, "dry_run": bool(args.dry_run),
+               "warnings": warnings}
+    if args.dry_run:
+        report(summary, args.json, warnings)
+        return EXIT_OK
+
+    try:
+        if entries:
+            new_dir.mkdir(parents=True)
+            for old, new in names.items():
+                shutil.copy2(old_dir / old, new_dir / new)
+            for entry in new_entries:
+                if hashlib.sha256((new_dir / entry["file"]).read_bytes()).hexdigest() != entry.get("sha256"):
+                    raise ClipError(f"copy {entry['file']} does not match its sha256", EXIT_CONVERT)
+            _write_json(new_dir / "assets.json", {"slug": stem, "assets": new_entries})
+        dest.write_text(md, encoding="utf-8")
+        ledger[key] = {"to": _key(dest, vault), "assets_from": _key(old_dir, vault) if entries else None,
+                       "assets_to": _key(new_dir, vault) if entries else None, "files": names}
+        _write_json(ledger_path, ledger)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        if entries and new_dir.exists():
+            shutil.rmtree(new_dir)
+        raise
+    report(summary, args.json, warnings)
+    return EXIT_OK
+
+
+def _vault_path(value: Optional[str], vault: Optional[Path]) -> Optional[Path]:
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_absolute() or vault is None else vault / path
+
+
+def _remove_folder(folder: Optional[Path], files, warnings: list) -> list:
+    removed = []
+    if folder is None or not folder.is_dir():
+        return removed
+    for name in [*files, "assets.json", "page.html"]:
+        path = folder / name
+        if path.is_file() and not path.is_symlink():
+            path.unlink()
+            removed.append(str(path))
+    try:
+        folder.rmdir()
+    except OSError:
+        warnings.append(f"kept {folder}: it holds files this adoption did not write")
+    return removed
+
+
+def _adoption(args: argparse.Namespace, note_arg: str):
+    note, vault, base, _, _ = _source(args, note_arg)
+    ledger = _read_json(base / LEDGER)
+    entry = ledger.get(_key(note, vault))
+    if not entry:
+        raise ClipError(f"no recorded adoption for {note}", EXIT_USAGE)
+    return note, vault, base, ledger, entry
+
+
+def cmd_release(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
+    note, vault, base, ledger, entry = _adoption(args, args.release)
+    dest = _vault_path(entry["to"], vault)
+    if dest is None or not dest.is_file():
+        raise ClipError(f"the adopted note {entry['to']} is gone; --unadopt instead of releasing the only copy",
+                        EXIT_USAGE)
+    released = _remove_folder(_vault_path(entry.get("assets_from"), vault), entry.get("files", {}).keys(), warnings)
+    note.unlink()
+    released.insert(0, str(note))
+    del ledger[_key(note, vault)]
+    _write_json(base / LEDGER, ledger)
+    report({"note": str(note), "adopted_to": str(dest), "released": released, "warnings": warnings},
+           args.json, warnings)
+    return EXIT_OK
+
+
+def cmd_unadopt(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
+    note, vault, base, ledger, entry = _adoption(args, args.unadopt)
+    removed = _remove_folder(_vault_path(entry.get("assets_to"), vault), entry.get("files", {}).values(), warnings)
+    dest = _vault_path(entry["to"], vault)
+    if dest is not None and dest.is_file():
+        dest.unlink()
+        removed.insert(0, str(dest))
+    del ledger[_key(note, vault)]
+    _write_json(base / LEDGER, ledger)
+    report({"note": str(note), "removed": removed, "warnings": warnings}, args.json, warnings)
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -813,6 +1030,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-html", action="store_true", help="save the fetched HTML next to the assets")
     parser.add_argument("--force", action="store_true", help="overwrite an existing note and its asset folder")
     parser.add_argument("--localize", metavar="NOTE", help="only localize images of an existing note")
+    parser.add_argument("--adopt", metavar="NOTE", help="copy a raw clip to --to, its images renamed after the note")
+    parser.add_argument("--to", metavar="DEST.md", help="destination note for --adopt (its folder must exist)")
+    parser.add_argument("--stem", help="image name prefix for --adopt (default: the destination's stem)")
+    parser.add_argument("--dry-run", action="store_true", help="with --adopt: report the plan, write nothing")
+    parser.add_argument("--release", metavar="NOTE", help="delete an adopted raw clip and its old image folder")
+    parser.add_argument("--unadopt", metavar="NOTE", help="delete an adoption's copy, keeping the raw clip")
     parser.add_argument("--timeout", type=int, default=60, help="navigation timeout in seconds (default 60)")
     parser.add_argument("--wait-for", type=int, default=0, metavar="MS", help="extra wait after load")
     parser.add_argument("--user-agent", help="override the browser/download User-Agent")
@@ -827,6 +1050,12 @@ def main(argv: Optional[list] = None) -> int:
     cfg = load_config()
     warnings: list = []
     try:
+        if args.adopt:
+            return cmd_adopt(args, cfg, warnings)
+        if args.release:
+            return cmd_release(args, cfg, warnings)
+        if args.unadopt:
+            return cmd_unadopt(args, cfg, warnings)
         if args.localize:
             return cmd_localize(args, cfg, warnings)
         return cmd_clip(args, cfg, warnings)

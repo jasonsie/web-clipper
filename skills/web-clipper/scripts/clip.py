@@ -669,6 +669,9 @@ def localize_markdown(md: str, fetched: Fetched, base_url: str, store: AssetStor
         else:
             name = store_url(payload, "")
             if name:
+        elif store.vault is not None and not urllib.parse.urlparse(payload).scheme and \
+                (store.vault / payload).is_file():
+            pass  # an <img> already pointing at a vault file (an earlier localize or an adoption)
                 edits.append((start, end, store.vault_relative(name)))
         last_end = end
 

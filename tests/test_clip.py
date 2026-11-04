@@ -5,7 +5,9 @@ Unit tests run offline. The end-to-end tests need the built Obsidian Web Clipper
 the Playwright test additionally needs `python3 -c "import playwright"` to succeed.
 """
 import base64
+import contextlib
 import http.server
+import io
 import importlib.util
 import json
 import os
@@ -38,6 +40,10 @@ CLIP_KEYS = {"note", "url", "requested_url", "via", "template", "title", "assets
              "warnings"}
 LOCALIZE_KEYS = {"note", "url", "via", "title", "assets", "assets_dir", "changed", "warnings"}
 ASSET_KEYS = {"saved", "failed", "graphs", "svg_blocks"}
+# zkfy's clip-to-zk reads these from --adopt / --release / --unadopt.
+ADOPT_KEYS = {"note", "adopted_from", "assets_dir", "assets", "dry_run", "warnings"}
+RELEASE_KEYS = {"note", "adopted_to", "released", "warnings"}
+UNADOPT_KEYS = {"note", "removed", "warnings"}
 
 
 def png_bytes(width=64, height=64, rgb=(200, 50, 50)):
@@ -252,6 +258,120 @@ class LocalizeTest(unittest.TestCase):
             self.assertEqual(store2.add("https://cdn.test/a.png", png, "png", "image/png", "recorded", "a"),
                              "t-01-a.png")
             self.assertEqual(len(list((vault / "raw/assets/t").iterdir())), 6)
+
+
+class AdoptTest(unittest.TestCase):
+    """--adopt copies a clip to its vault note, --release drops the raw copy, --unadopt drops the adopted one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = make_vault(Path(self.tmp.name))
+        (self.vault / "111.cs").mkdir()
+        self.old_dir = self.vault / "raw/assets/my-page"
+        self.old_dir.mkdir(parents=True)
+        self.files = {"my-page-01-a.png": png_bytes(), "my-page-02-b.svg": b"<svg xmlns='http://www.w3.org/2000/svg'/>"}
+        entries = []
+        for name, data in self.files.items():
+            (self.old_dir / name).write_bytes(data)
+            entries.append({"file": name, "url": f"https://site.test/{name}", "sha256": clip.hashlib.sha256(data).hexdigest()})
+        (self.old_dir / "assets.json").write_text(json.dumps({"slug": "my-page", "assets": entries}))
+        self.note = self.vault / "raw/My Page.md"
+        self.note.write_text('---\nsource: "https://site.test/"\ntitle: "My Page"\n---\n'
+                             "Intro.\n![[my-page-01-a.png|Alpha]]\n"
+                             "```md\n![[my-page-01-a.png]]\n```\n"
+                             '<table><tr><td><img src="raw/assets/my-page/my-page-02-b.svg" alt="b"></td></tr></table>\n'
+                             "![[my-page-02-b.svg]]\n", encoding="utf-8")
+        self.dest = self.vault / "111.cs/CS-My-Page.md"
+        self.new_dir = self.vault / "raw/assets/CS-My-Page"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = clip.main([*args, "--vault", str(self.vault), "--json"])
+        return code, (json.loads(out.getvalue()) if out.getvalue().strip() else {}), err.getvalue()
+
+    def adopt(self, *extra):
+        return self.run_main("--adopt", str(self.note), "--to", str(self.dest), *extra)
+
+    def test_dry_run_writes_nothing(self):
+        code, summary, err = self.adopt("--dry-run")
+        self.assertEqual(code, clip.EXIT_OK, err)
+        self.assertEqual(set(summary), ADOPT_KEYS)
+        self.assertTrue(summary["dry_run"])
+        self.assertEqual(summary["assets"], {"renamed": 2, "embeds": 3})
+        self.assertFalse(self.dest.exists() or self.new_dir.exists())
+
+    def test_adopt_copies_renames_and_rewrites_outside_fences(self):
+        code, summary, err = self.adopt()
+        self.assertEqual(code, clip.EXIT_OK, err)
+        self.assertEqual((summary["note"], summary["assets_dir"]), (str(self.dest), str(self.new_dir)))
+        text = self.dest.read_text(encoding="utf-8")
+        self.assertIn("![[CS-My-Page-01-a.png|Alpha]]", text)
+        self.assertIn("```md\n![[my-page-01-a.png]]\n```", text)          # fenced: left as written
+        self.assertIn('<img src="raw/assets/CS-My-Page/CS-My-Page-02-b.svg" alt="b">', text)
+        self.assertIn("![[CS-My-Page-02-b.svg]]", text)
+        self.assertEqual(sorted(p.name for p in self.new_dir.iterdir()),
+                         ["CS-My-Page-01-a.png", "CS-My-Page-02-b.svg", "assets.json"])
+        manifest = json.loads((self.new_dir / "assets.json").read_text())
+        self.assertEqual(manifest["slug"], "CS-My-Page")
+        self.assertEqual([e["file"] for e in manifest["assets"]], ["CS-My-Page-01-a.png", "CS-My-Page-02-b.svg"])
+        self.assertTrue(self.note.exists() and (self.old_dir / "my-page-01-a.png").exists())  # raw kept
+
+    def test_refuses_collisions_and_double_adoption(self):
+        self.dest.write_text("x")
+        self.assertEqual(self.adopt()[0], clip.EXIT_EXISTS)
+        self.dest.unlink()
+        self.assertEqual(self.adopt()[0], clip.EXIT_OK)
+        self.assertEqual(self.run_main("--adopt", str(self.note), "--to", str(self.vault / "111.cs/CS-Other.md"))[0],
+                         clip.EXIT_EXISTS)                                  # already adopted
+        self.assertEqual(self.run_main("--adopt", str(self.note), "--to", str(self.vault / "nope/CS-X.md"))[0],
+                         clip.EXIT_USAGE)                                   # never creates folders
+
+    def test_checksum_mismatch_leaves_nothing_behind(self):
+        (self.old_dir / "my-page-02-b.svg").write_bytes(b"changed")
+        code, _, err = self.adopt()
+        self.assertEqual(code, clip.EXIT_CONVERT, err)
+        self.assertFalse(self.dest.exists() or self.new_dir.exists())
+        self.assertFalse((self.vault / "raw/assets/.adoptions.json").exists())
+
+    def test_release_deletes_only_the_raw_copy(self):
+        self.assertEqual(self.run_main("--release", str(self.note))[0], clip.EXIT_USAGE)  # nothing adopted yet
+        self.adopt()
+        code, summary, err = self.run_main("--release", str(self.note))
+        self.assertEqual(code, clip.EXIT_OK, err)
+        self.assertEqual(set(summary), RELEASE_KEYS)
+        self.assertFalse(self.note.exists() or self.old_dir.exists())
+        self.assertTrue(self.dest.exists() and (self.new_dir / "CS-My-Page-01-a.png").exists())
+        self.assertEqual(self.run_main("--release", str(self.note))[0], clip.EXIT_USAGE)
+
+    def test_release_refuses_when_the_adopted_note_is_gone(self):
+        self.adopt()
+        self.dest.unlink()
+        self.assertEqual(self.run_main("--release", str(self.note))[0], clip.EXIT_USAGE)
+        self.assertTrue(self.note.exists())
+
+    def test_unadopt_removes_the_copy_and_allows_a_retry(self):
+        self.adopt()
+        code, summary, err = self.run_main("--unadopt", str(self.note))
+        self.assertEqual(code, clip.EXIT_OK, err)
+        self.assertEqual(set(summary), UNADOPT_KEYS)
+        self.assertFalse(self.dest.exists() or self.new_dir.exists())
+        self.assertTrue(self.note.exists() and (self.old_dir / "assets.json").exists())
+        self.assertEqual(self.adopt()[0], clip.EXIT_OK)
+
+    def test_localize_reuses_the_adopted_folder(self):
+        self.adopt()
+        data = base64.b64encode(png_bytes()).decode()
+        with self.dest.open("a", encoding="utf-8") as f:
+            f.write(f"![Dot](data:image/png;base64,{data})\n")
+        code, _, err = self.run_main("--localize", str(self.dest))
+        self.assertEqual(code, clip.EXIT_OK, err)
+        self.assertIn("![[CS-My-Page-03-inline.png|Dot]]", self.dest.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(p.name for p in (self.vault / "raw/assets").iterdir()),
+                         [".adoptions.json", "CS-My-Page", "my-page"])  # no new slug folder
 
 
 class ClipperErrorsTest(unittest.TestCase):

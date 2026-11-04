@@ -7,6 +7,7 @@ description: Clip a web page into an Obsidian vault the way Obsidian Web Clipper
 
 `$ARGUMENTS — <url> [--out <dir|file.md>] [--html <file>] [--keep-html] [--force]`
 `$ARGUMENTS — --localize <existing-note.md>`
+`$ARGUMENTS — --adopt <raw-clip.md> --to <dest.md> | --release <raw-clip.md> | --unadopt <raw-clip.md>`
 
 ## What it produces
 
@@ -55,6 +56,28 @@ Exit codes: `0` ok · `1` prerequisites or usage · `2` fetch failed or page blo
 
 After a run, read the summary on stderr and tell the user the note path, how many assets were saved,
 and every warning verbatim. Do not post-edit the clip with Write/Edit; rerun with `--force` instead.
+
+## Adopt a clip into the vault
+
+Moving a clip out of `raw/` is two-phase, so one complete copy exists at every step. Callers such as
+zkfy's `clip-to-zk` check the adopted note before releasing the raw one.
+
+```bash
+web-clipper --adopt "raw/X.md" --to "111.cs/CS-X.md" --dry-run --json   # plan only
+web-clipper --adopt "raw/X.md" --to "111.cs/CS-X.md" --json             # copy; raw/ untouched
+web-clipper --release "raw/X.md" --json                                  # good: delete the raw copy
+web-clipper --unadopt "raw/X.md" --json                                  # bad: delete the adopted copy
+```
+
+- `--adopt` copies the note to `--to` (its folder must exist) and the images to `<attachments>/<stem>/`,
+  renamed `<stem>-NN-<name>` (`--stem`, default the destination's stem). Only image-embed targets and
+  `<img src>` paths outside code fences change; every copy is checked against `assets.json` sha256.
+  Exit `3` when the destination, the image folder or an earlier adoption exists; `4` when an image does not
+  match; `1` for a missing note or destination folder. Paths are relative to the current folder.
+- The adoption is recorded in `<attachments>/.adoptions.json`. `--release` deletes the raw note and its old
+  image folder only for a recorded adoption whose note still exists; `--unadopt` deletes the adopted note and
+  its images and keeps the raw clip. Both delete only files the adoption listed.
+- `--localize` on an adopted note saves new images into its `<stem>/` folder.
 
 ## Limitation, and the one recourse: `--html`
 

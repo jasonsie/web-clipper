@@ -38,19 +38,17 @@ The filename is the page title with `# ^ [ ] | / : \` removed, like the extensio
 
 ## Run it
 
-Always through Bash: the script writes the note itself (vault hooks may block the Write/Edit tools
-under `raw/`). Run from inside the vault, or pass `--vault <root>`.
+Always through Bash, as the `web-clipper` command: the plugin puts it on PATH, and it writes the
+note itself (vault hooks may block the Write/Edit tools under `raw/`). Run from inside the vault,
+or pass `--vault <root>`.
 
 ```bash
-python3 ~/.claude/skills/web-clipper/scripts/clip.py <url>                     # → <vault>/raw/<Title>.md
-python3 ~/.claude/skills/web-clipper/scripts/clip.py <url> --out raw/ai        # choose the folder
-python3 ~/.claude/skills/web-clipper/scripts/clip.py <url> --html page.html    # page saved from a browser
-python3 ~/.claude/skills/web-clipper/scripts/clip.py --localize "raw/cs/x.md"  # fetch an old clip's remote images
-python3 ~/.claude/skills/web-clipper/scripts/clip.py <url> --json              # machine-readable summary
+web-clipper <url>                      # → <vault>/raw/<Title>.md
+web-clipper <url> --out raw/ai         # choose the folder
+web-clipper <url> --html page.html     # page saved from a browser
+web-clipper --localize "raw/cs/x.md"   # fetch an old clip's remote images
+web-clipper <url> --json               # machine-readable summary
 ```
-
-Codex and Pi find the same folder at `~/.agents/skills/web-clipper/`, Antigravity at
-`~/.gemini/config/skills/web-clipper/`.
 
 Exit codes: `0` ok · `1` prerequisites or usage · `2` fetch failed or page blocked (see below) ·
 `3` output exists (use `--force`) · `4` conversion failed · `5` note written but some assets stayed remote.
@@ -74,7 +72,7 @@ Recourse:
      JavaScript tool, and write the result to a file outside `raw/` (the scratchpad is fine).
 2. Rerun with the file. The URL is still required: it fills `source:` and resolves relative links.
    ```bash
-   python3 ~/.claude/skills/web-clipper/scripts/clip.py <url> --html <file>
+   web-clipper <url> --html <file>
    ```
 
 A false alarm (an image-only page with little text) can be pushed through with `--ignore-blocked`.
@@ -92,7 +90,7 @@ recorded from the browser session is capped at 200 MB (the rest is downloaded).
 
 The CLI must be upstream `obsidianmd/obsidian-clipper` at or after commit `5315b30` (after tag 1.7.1);
 1.6.2 and 1.7.1 return empty clips. Override locations with `--cli`/`--node`/`--template`,
-`OBSIDIAN_CLIPPER_CLI`, or `~/.config/zkfy/web-clipper.json`:
+`OBSIDIAN_CLIPPER_CLI`, or `~/.config/web-clipper/config.json`:
 
 ```json
 { "cli": "/path/to/obsidian_clipper/dist/cli.cjs", "node": "/path/to/node", "template": "/path/to/my-clipper.json" }
@@ -127,6 +125,6 @@ output with the user's own template: Web Clipper → Settings → the template �
 ## Verification
 
 ```bash
-cd ~/Developer/mine/ai/ai_dotfiles && python3 -m unittest discover -s scripts/tests -p 'test_web_clipper.py' -v
-python3 ~/.claude/skills/web-clipper/scripts/clip.py https://www.aihero.dev/what-are-tokens --out /tmp/clips --json
+web-clipper --version                                                     # web-clipper <version>
+web-clipper https://www.aihero.dev/what-are-tokens --out /tmp/clips --json
 ```

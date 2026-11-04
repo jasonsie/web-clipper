@@ -1,0 +1,18 @@
+{
+  "name": "web-clipper",
+  "version": "2.1.0",
+  "description": "Clip a web page into an Obsidian vault the way Obsidian Web Clipper does: full body, clip frontmatter, and every image, inline SVG and canvas graph saved locally as wikilinked attachments. Ships the web-clipper command.",
+  "author": {
+    "name": "Jason"
+  },
+  "homepage": "https://github.com/jasonsie/web-clipper",
+  "repository": "https://github.com/jasonsie/web-clipper",
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "web-clipper",
+    "clipping",
+    "markdown",
+    "playwright"
+  ]
+}

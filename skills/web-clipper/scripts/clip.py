@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""zkfy web-clipper: capture a web page into an Obsidian vault the way the
+"""web-clipper: capture a web page into an Obsidian vault the way the
 Obsidian Web Clipper extension does, with images and graphs stored locally.
 
 Pipeline
@@ -8,11 +8,12 @@ Pipeline
     3. assets   images / inline SVG / canvas graphs -> <attachments>/<slug>/ ; links -> ![[wikilinks]]
 
 Usage
-    clip.py <url> [--out DIR|FILE.md] [--html FILE|-] [--ignore-blocked]
-                  [--template JSON] [--cli cli.cjs] [--node PATH] [--vault DIR]
-                  [--assets-dir DIR] [--no-assets] [--keep-html] [--force]
-                  [--timeout S] [--wait-for MS] [--user-agent UA] [--min-graph-px N] [--json]
-    clip.py --localize NOTE.md [--vault DIR] [--assets-dir DIR] [--json]
+    web-clipper <url> [--out DIR|FILE.md] [--html FILE|-] [--ignore-blocked]
+                      [--template JSON] [--cli cli.cjs] [--node PATH] [--vault DIR]
+                      [--assets-dir DIR] [--no-assets] [--keep-html] [--force]
+                      [--timeout S] [--wait-for MS] [--user-agent UA] [--min-graph-px N] [--json]
+    web-clipper --localize NOTE.md [--vault DIR] [--assets-dir DIR] [--json]
+    (web-clipper is bin/web-clipper, which runs this file; `python3 clip.py ...` is the same.)
 
 Limitation and recourse
     A bot challenge, login wall, paywall, or an app that renders nothing without a session
@@ -42,12 +43,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"  # = .claude-plugin/plugin.json; a test keeps them equal
 SKILL_DIR = Path(__file__).resolve().parent.parent
 INPAGE_JS = SKILL_DIR / "scripts" / "inpage.js"
 DEFAULT_TEMPLATE = SKILL_DIR / "templates" / "row.json"
 DEFAULT_CLI = Path.home() / "Developer" / "forks" / "tools" / "obsidian_clipper" / "dist" / "cli.cjs"
-CONFIG_PATH = Path.home() / ".config" / "zkfy" / "web-clipper.json"
+CONFIG_PATH = Path.home() / ".config" / "web-clipper" / "config.json"
 SYNTHETIC_HOST = "https://clip-assets.invalid/"
 DEFAULT_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
@@ -796,7 +797,7 @@ def cmd_localize(args: argparse.Namespace, cfg: dict, warnings: list) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="clip.py", description=__doc__,
+    parser = argparse.ArgumentParser(prog="web-clipper", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("url", nargs="?", help="page to clip")
     parser.add_argument("--out", help="output directory or .md path (default: <vault>/raw)")
@@ -817,7 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user-agent", help="override the browser/download User-Agent")
     parser.add_argument("--min-graph-px", type=int, default=48, help="min rendered size for svg/canvas capture")
     parser.add_argument("--json", action="store_true", help="print a JSON summary on stdout")
-    parser.add_argument("--version", action="version", version=f"zkfy web-clipper {VERSION}")
+    parser.add_argument("--version", action="version", version=f"web-clipper {VERSION}")
     return parser
 
 

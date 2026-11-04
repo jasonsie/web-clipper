@@ -1,4 +1,4 @@
-// zkfy web-clipper — in-page preprocessing run by Playwright before the DOM is
+// web-clipper — in-page preprocessing run by Playwright before the DOM is
 // serialized and handed to the Obsidian Web Clipper CLI.
 //
 // Evaluated as:  page.evaluate(SOURCE, { phase, minPx, host, alts })

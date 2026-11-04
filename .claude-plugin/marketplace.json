@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "web-clipper-marketplace",
+  "description": "Marketplace for the web-clipper plugin: clip web pages into an Obsidian vault with local images and graphs.",
+  "owner": {
+    "name": "Jason",
+    "email": "polyklietoscanon@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "web-clipper",
+      "description": "Clip a web page into an Obsidian vault the way Obsidian Web Clipper does, with every image, inline SVG and canvas graph saved locally.",
+      "author": {
+        "name": "Jason"
+      },
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

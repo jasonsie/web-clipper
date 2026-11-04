@@ -1,9 +1,10 @@
-"""Run: python3 -m unittest discover -s scripts/tests -p 'test_web_clipper.py' -v
+"""Run: python3 -m unittest discover -s tests -v
 
 Unit tests run offline. The end-to-end tests need the built Obsidian Web Clipper CLI
 (OBSIDIAN_CLIPPER_CLI or ~/Developer/forks/tools/obsidian_clipper/dist/cli.cjs) and Node 21+;
 the Playwright test additionally needs `python3 -c "import playwright"` to succeed.
 """
+import base64
 import http.server
 import importlib.util
 import json
@@ -18,17 +19,25 @@ import unittest
 import zlib
 from pathlib import Path
 
-from support import ROOT
-
+ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "skills/web-clipper/scripts/clip.py"
+BIN = ROOT / "bin" / "web-clipper"
+PLUGIN = ROOT / ".claude-plugin" / "plugin.json"
+MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 SPEC = importlib.util.spec_from_file_location("clip", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 clip = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = clip
+sys.modules[SPEC.name] = clip  # @dataclass looks its module up here
 SPEC.loader.exec_module(clip)
 
-FIXTURE = Path(__file__).parent / "fixtures" / "web-clipper" / "sample.html"
+FIXTURE = Path(__file__).parent / "fixtures" / "sample.html"
 CLI = Path(os.environ.get("OBSIDIAN_CLIPPER_CLI") or clip.DEFAULT_CLI)
+
+# The --json summary keys other plugins read (zkfy reads note, assets, warnings).
+CLIP_KEYS = {"note", "url", "requested_url", "via", "template", "title", "assets", "assets_dir", "fetch",
+             "warnings"}
+LOCALIZE_KEYS = {"note", "url", "via", "title", "assets", "assets_dir", "changed", "warnings"}
+ASSET_KEYS = {"saved", "failed", "graphs", "svg_blocks"}
 
 
 def png_bytes(width=64, height=64, rgb=(200, 50, 50)):
@@ -66,7 +75,7 @@ class ServedFixture:
     """Serve a copy of the fixture (plus generated PNGs) on a loopback port."""
 
     def __enter__(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="zkclip-www-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="web-clipper-www-")
         root = Path(self.tmp.name)
         shutil.copy(FIXTURE, root / "sample.html")
         (root / "img1.png").write_bytes(png_bytes(120, 80, (200, 50, 50)))
@@ -209,7 +218,7 @@ class LocalizeTest(unittest.TestCase):
                   "![Alpha](https://cdn.test/a.png)\n\n"
                   "![Beta](rel/b.jpg \"Beta title\")\n\n"
                   "![Chart](https://clip-assets.invalid/graph-01.svg)\n\n"
-                  "![Data](data:image/png;base64," + __import__("base64").b64encode(png).decode() + ")\n\n"
+                  "![Data](data:image/png;base64," + base64.b64encode(png).decode() + ")\n\n"
                   "<svg xmlns='http://www.w3.org/2000/svg'><circle r='1'/></svg>\n\n"
                   "<table><tr><td><img src=\"https://cdn.test/a.png\" alt=\"dup\"></td></tr></table>\n\n"
                   "```\n![in code](https://cdn.test/a.png)\n```\n\n"
@@ -273,6 +282,63 @@ class ClipperErrorsTest(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, clip.EXIT_CONVERT, case)
 
 
+class ContractTest(unittest.TestCase):
+    """What callers rely on: the command, its exit codes, the --json summary, the config path."""
+
+    def test_exit_codes(self):
+        self.assertEqual((clip.EXIT_OK, clip.EXIT_USAGE, clip.EXIT_FETCH, clip.EXIT_EXISTS, clip.EXIT_CONVERT,
+                          clip.EXIT_ASSETS), (0, 1, 2, 3, 4, 5))
+
+    def test_config_path(self):
+        self.assertEqual(clip.CONFIG_PATH, Path.home() / ".config" / "web-clipper" / "config.json")
+
+    def test_command_runs_through_a_link_from_any_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "bin" / "web-clipper"
+            link.parent.mkdir()
+            link.symlink_to(BIN)
+            version = subprocess.run([str(link), "--version"], capture_output=True, text=True, cwd=tmp,
+                                     timeout=30)
+            self.assertEqual((version.returncode, version.stdout), (0, f"web-clipper {clip.VERSION}\n"),
+                             version.stderr)
+            missing = subprocess.run([str(link), "--localize", "nope.md"], capture_output=True, text=True,
+                                     cwd=tmp, timeout=30)
+            self.assertEqual(missing.returncode, clip.EXIT_USAGE, missing.stderr)
+            self.assertIn("note not found", missing.stderr)
+
+    def test_localize_json_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = make_vault(Path(tmp))
+            note = vault / "raw" / "Clip.md"
+            data = base64.b64encode(png_bytes()).decode()
+            note.write_text(f'---\nsource: "https://site.test/"\ntitle: "Clip"\n---\n\n'
+                            f"![Dot](data:image/png;base64,{data})\n")
+            proc = subprocess.run([str(BIN), "--localize", str(note), "--json"], capture_output=True, text=True,
+                                  cwd=str(vault), timeout=60)
+            self.assertEqual(proc.returncode, clip.EXIT_OK, proc.stderr)
+            summary = json.loads(proc.stdout)
+            self.assertEqual(set(summary), LOCALIZE_KEYS)
+            self.assertEqual(set(summary["assets"]), ASSET_KEYS)
+            self.assertEqual(summary["assets"]["saved"], 1)
+            self.assertIn("![[clip-01-inline.png|Dot]]", note.read_text())
+
+
+class PackagingTest(unittest.TestCase):
+    """The names and the version zkfy's dependency entry resolves against."""
+
+    def test_names_and_version_agree(self):
+        plugin = json.loads(PLUGIN.read_text())
+        market = json.loads(MARKETPLACE.read_text())
+        self.assertEqual((plugin["name"], plugin["version"]), ("web-clipper", clip.VERSION))
+        self.assertEqual(market["name"], "web-clipper-marketplace")
+        entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
+        self.assertEqual(entry["source"], "./")
+        self.assertNotIn("version", entry)  # plugin.json holds the one version; validate warns on two
+
+    def test_command_is_executable(self):
+        self.assertTrue(os.access(BIN, os.X_OK), BIN)
+
+
 @unittest.skipUnless(CLI.is_file() and node_ok(), "obsidian-clipper CLI not built or Node < 21")
 class EndToEndHtmlTest(unittest.TestCase):
     def test_html_input_without_browser(self):
@@ -282,6 +348,8 @@ class EndToEndHtmlTest(unittest.TestCase):
             proc = run_clip(url, "--html", str(FIXTURE), "--json", "--cli", str(CLI), cwd=str(vault))
             self.assertEqual(proc.returncode, clip.EXIT_ASSETS, proc.stderr)
             summary = json.loads(proc.stdout)
+            self.assertEqual(set(summary), CLIP_KEYS)
+            self.assertEqual(set(summary["assets"]), ASSET_KEYS)
             note = Path(summary["note"])
             self.assertEqual(note, vault / "raw" / "Sample Clip Page.md")
             text = note.read_text()

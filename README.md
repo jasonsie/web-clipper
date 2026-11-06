@@ -44,6 +44,22 @@ skill walks you through it.
 Settings such as another template or CLI path go in `~/.config/web-clipper/config.json`.
 Before 2.1.0 that file was `~/.config/zkfy/web-clipper.json`; move it if you have one.
 
+## Support
+
+The plugin is listed in [ai-dotfiles](https://github.com/jasonsie/ai-dotfiles)' `config/plugins.json`
+at an exact version, and installed through each CLI's own plugin manager: the Claude and Codex
+marketplaces, a Pi package, and Antigravity's plugin install.
+
+| | Claude Code | Codex | Pi | Antigravity |
+|---|---|---|---|---|
+| Skills | `web-clipper` | `web-clipper` | `web-clipper` | `web-clipper` |
+| `web-clipper` command on PATH | Plugin `bin/` is on PATH; ai-dotfiles also links it into `~/.local/bin` | ai-dotfiles links `bin/web-clipper` into `~/.local/bin` | ai-dotfiles links `bin/web-clipper` into `~/.local/bin` | ai-dotfiles links `bin/web-clipper` into `~/.local/bin` |
+| Hooks | none shipped | none shipped | none shipped | none shipped |
+| MCP servers | none shipped | none shipped | none shipped | none shipped |
+| Agents | none shipped | none shipped | none shipped | none shipped |
+
+ai-dotfiles links the command from a checkout at the pinned tag, so the shell finds it too.
+
 ## Call it from another plugin
 
 While the plugin is enabled, its `bin/` folder is on the PATH of Claude's Bash tool, so your
@@ -92,6 +108,8 @@ claude --plugin-dir .                      # a session that uses this checkout i
 The clipper began in [zkfy](https://github.com/jasonsie/zkfy) as a shell script, was rewritten
 in Python in the author's dotfiles (`jasonsie/ai-dotfiles#28`), and moved here in November 2026
 with that history.
+
+- **2.2.1**: native Antigravity manifest; per-CLI support table.
 
 ## License
 

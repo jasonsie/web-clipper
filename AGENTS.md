@@ -8,6 +8,7 @@ depends on it (`web-clipper@web-clipper-marketplace`, `^2.1`). `CLAUDE.md` links
 | Path | What |
 |---|---|
 | `.claude-plugin/plugin.json` | The plugin and its one `version` |
+| `.antigravity-plugin/plugin.json` | Antigravity's native manifest; `name`, `version`, `description` and `author` equal `plugin.json`'s (`PackagingTest`) |
 | `.claude-plugin/marketplace.json` | `web-clipper-marketplace`; its entry carries no `version` (validate warns on two) |
 | `bin/web-clipper` | The command; Claude Code puts `bin/` on the Bash PATH while the plugin is enabled. Runs `clip.py` with the same arguments |
 | `skills/web-clipper/SKILL.md` | How an agent clips: usage, exit codes, the `--html` recourse, prerequisites |
@@ -24,11 +25,11 @@ depends on it (`web-clipper@web-clipper-marketplace`, `^2.1`). `CLAUDE.md` links
 - Callers run the bare `web-clipper`. A path into the plugin breaks: the installed copy lives
   under a cache folder named for its version.
 - One version: `VERSION` in `clip.py` equals `version` in `plugin.json` (`PackagingTest`).
-  Installed copies update only when it changes. Release: bump both, merge, then
+  Installed copies update only when it changes. Release: bump `clip.py` and both manifests, merge, then
   `claude plugin tag --push` (tag `web-clipper--vX.Y.Z`, which dependents' ranges resolve to).
 - User settings live in `~/.config/web-clipper/config.json`; anything the plugin must keep
   between versions goes in `${CLAUDE_PLUGIN_DATA}`, never the plugin folder.
-- Claude-only for now, like zkfy. Serving Codex, Pi and Antigravity is planned separately.
+- Codex, Pi and Antigravity get it through ai-dotfiles' plugin list (README, Support); no per-CLI code lives here.
 
 ## Verify
 

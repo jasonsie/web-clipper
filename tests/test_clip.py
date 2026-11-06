@@ -455,6 +455,12 @@ class PackagingTest(unittest.TestCase):
         self.assertEqual(entry["source"], "./")
         self.assertNotIn("version", entry)  # plugin.json holds the one version; validate warns on two
 
+    def test_antigravity_manifest_matches(self):
+        plugin = json.loads(PLUGIN.read_text())
+        agy = json.loads((PLUGIN.parent.parent / ".antigravity-plugin" / "plugin.json").read_text())
+        for key in ("name", "version", "description", "author"):
+            self.assertEqual(agy[key], plugin[key], key)
+
     def test_command_is_executable(self):
         self.assertTrue(os.access(BIN, os.X_OK), BIN)
 

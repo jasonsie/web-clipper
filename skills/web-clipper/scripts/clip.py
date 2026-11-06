@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-VERSION = "2.2.0"  # = .claude-plugin/plugin.json; a test keeps them equal
+VERSION = "2.2.1"  # = .claude-plugin/plugin.json; a test keeps them equal
 SKILL_DIR = Path(__file__).resolve().parent.parent
 INPAGE_JS = SKILL_DIR / "scripts" / "inpage.js"
 DEFAULT_TEMPLATE = SKILL_DIR / "templates" / "row.json"
